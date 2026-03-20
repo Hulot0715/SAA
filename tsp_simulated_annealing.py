@@ -5,7 +5,7 @@ import time
 from typing import List, Tuple
 
 # ============================================================
-# 0. 初始参数配置（从外部配置文件导入，修改参数请编辑 config.py）
+# 0. 初始参数配置（从外部配置文件导入，修改参数在 config.py）
 # ============================================================
 from config import (
     SEED,
@@ -81,8 +81,8 @@ def neighbor_2opt(tour: List[int]) -> List[int]:
         new_tour: 新的路径
     """
     new_tour = tour.copy()
-    i, j = sorted(np.random.choice(len(tour), 2, replace=False))
-    new_tour[i:j + 1] = new_tour[i:j + 1][::-1]
+    i, j = sorted(np.random.choice(len(tour), 2, replace=False)) # 随机选取两个位置 i < j
+    new_tour[i:j + 1] = new_tour[i:j + 1][::-1] # 逆转 tour[i..j] 段
     return new_tour
 
 
