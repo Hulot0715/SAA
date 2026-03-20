@@ -110,7 +110,7 @@ def neighbor_insert(tour: List[int]) -> List[int]:
     """
     new_tour = tour.copy()
     i = np.random.randint(len(tour))
-    city = new_tour.pop(i)
+    city = new_tour.pop(i) # 随机取出一座城市，插入到随机位置
     j = np.random.randint(len(new_tour))
     new_tour.insert(j, city)
     return new_tour
@@ -123,6 +123,8 @@ def simulated_annealing(
     cities: np.ndarray,
     dist_matrix: np.ndarray,
     alpha: float,
+    neighbor: str = '2-opt',
+    T_d: str = 'linear',
     T0: float = T0,
     T_final: float = T_FINAL,
     inner_iter: int = INNER_ITER,
@@ -131,19 +133,23 @@ def simulated_annealing(
     """
     模拟退火算法求解 TSP。
 
-    Args:
+    输入:
         cities      : 城市坐标数组
         dist_matrix : 距离矩阵
         alpha       : 退火系数（冷却率）
+        neighbor    : 邻域构造类型（2-opt、swap、insert）
+        T_d_type    : 温度衰减类型（线性、指数、对数）
         T0          : 初始温度
         T_final     : 终止温度
         inner_iter  : 每个温度的内循环迭代次数
         rng_seed    : 随机种子
 
-    Returns:
+    输出:
         best_tour   : 最优路径（城市索引列表）
         best_len    : 最优路径长度
         history     : 优化过程记录字典
+    异常：
+        ValueError: 如果温度衰减类型无效
     """
     np.random.seed(rng_seed)
     n = len(cities)
@@ -175,7 +181,7 @@ def simulated_annealing(
         # 内循环：热平衡（Metropolis 采样）
         for _ in range(inner_iter):
             # 生成邻域解（2-opt 逆转法）
-            new_tour = neighbor_2opt(current_tour)
+            new_tour = neighbor_2opt(current_tour) if neighbor == '2-opt' else neighbor_swap(current_tour) if neighbor == 'swap' else neighbor_insert(current_tour)
             new_len  = tour_length(new_tour, dist_matrix)
 
             delta_E = new_len - current_len
@@ -206,7 +212,14 @@ def simulated_annealing(
         history['iterations'].append(outer_iter)
 
         # 降温
-        T *= alpha
+        if T_d == 'linear':
+            T *= alpha
+        elif T_d == 'exponential':
+            T *= alpha ** (1 / inner_iter)
+        elif T_d == 'logarithmic':
+            T *= np.log(1 + inner_iter)
+        else:
+            raise ValueError(f'Invalid temperature decay type: {T_d}')
 
     return best_tour, best_len, history
 
@@ -221,6 +234,13 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
     绘制单次实验结果：
       左图：最终最优路线图（城市点 + 连线）
       右图：收敛曲线（横轴迭代次数，纵轴路径长度）
+      输入：
+        cities: 城市坐标数组
+        tour: 路径
+        history: 优化过程记录字典
+        alpha: 退火系数
+        best_len: 最优路径长度
+        save_path: 保存路径
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle(
@@ -267,12 +287,17 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
 def plot_comparison(histories: dict, alphas: List[float]):
     """
     绘制三组退火系数的对比汇总图。
+    输入：
+      histories: 优化过程记录字典
+      alphas: 退火系数列表
+    输出：
+      None
     """
-    colors = ['#e74c3c', '#2ecc71', '#3498db']
+    colors = ['#e74c3c', '#2ecc71', '#3498db'] #采用色系：红色、绿色、蓝色
 
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle(
-        '模拟退火 TSP — 退火系数 alpha 参数对比实验\n学号: 125130024341',
+        '模拟退火TSP对比实验\n学号: 125130024341',
         fontsize=14, fontweight='bold'
     )
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
@@ -344,6 +369,8 @@ if __name__ == '__main__':
             cities      = cities,
             dist_matrix = dist_matrix,
             alpha       = alpha,
+            neighbor    = '2-opt',
+            T_d         = 'linear',
             T0          = T0,
             T_final     = T_FINAL,
             inner_iter  = INNER_ITER,
@@ -380,5 +407,4 @@ if __name__ == '__main__':
         total_iter  = histories[alpha]['iterations'][-1]
         print(f'  {alpha:<16} {total_iter:<16} {best_len:.2f}')
     print('=' * 65)
-    print('\n结论：退火越慢（alpha 越大）-> 迭代次数越多，路径越短（更优）')
     print('所有图表已保存，请检查当前目录下的 PNG 文件。')
