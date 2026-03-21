@@ -71,49 +71,94 @@ def tour_length(tour: List[int], dist_matrix: np.ndarray) -> float:
 # ============================================================
 # 3. 邻域解生成（三种实现方式：2-opt逆转、随机交换、插入法）
 # ============================================================
-def neighbor_2opt(tour: List[int]) -> List[int]:
+def move_2opt(tour: List[int], dist_matrix: np.ndarray) -> Tuple[List[int], float]:
     """
-    2-opt 邻域：随机选取两个位置 i < j，逆转 tour[i..j] 段。
-    这是最经典的 TSP 邻域操作。
+    2-opt 邻域移动：随机选取 i < j，逆转 tour[i..j]，并以 O(1) 计算增量代价。
+    2-opt 只影响逆转段两端共 4 个端点，替换两条边：
+      旧边：(a, b) 和 (c, d)
+      新边：(a, c) 和 (b, d)
+    其中：a=tour[(i-1)%n], b=tour[i], c=tour[j], d=tour[(j+1)%n]
+    退化情形（i=0 且 j=n-1，整环反转）：delta_E=0，直接返回。
     输入：
-        tour: 路径
+        tour        : 当前路径
+        dist_matrix : 城市间距离矩阵
     输出：
-        new_tour: 新的路径
+        new_tour    : 2-opt 后的新路径
+        delta_E     : 路径长度增量（负值表示更优）
     """
+    n = len(tour)
+    i, j = sorted(np.random.choice(n, 2, replace=False))
+
+    # 退化：整条路径完全反转，环长度不变
+    if i == 0 and j == n - 1:
+        new_tour = tour[::-1]
+        return new_tour, 0.0
+
+    a, b, c, d = tour[(i-1) % n], tour[i], tour[j], tour[(j+1) % n]
+    delta_E = float(
+        (dist_matrix[a][c] + dist_matrix[b][d])
+        - (dist_matrix[a][b] + dist_matrix[c][d])
+    )
+
     new_tour = tour.copy()
-    i, j = sorted(np.random.choice(len(tour), 2, replace=False)) # 随机选取两个位置 i < j
-    new_tour[i:j + 1] = new_tour[i:j + 1][::-1] # 逆转 tour[i..j] 段
-    return new_tour
+    new_tour[i:j + 1] = new_tour[i:j + 1][::-1]
+    return new_tour, delta_E
 
 
-def neighbor_swap(tour: List[int]) -> List[int]:
+def move_swap(tour: List[int], dist_matrix: np.ndarray) -> Tuple[List[int], float]:
     """
-    随机交换两城市位置
+    swap 邻域移动：随机交换两城市位置，以 O(1) 计算增量代价。
+    交换城市 i 和 j（假设 i < j 且不相邻）后，受影响的边为：
+      旧边：(a,b), (b,c), (d,e), (e,f)
+      新边：(a,e), (e,c), (d,b), (b,f)
+    其中：a=tour[i-1], b=tour[i], c=tour[i+1], d=tour[j-1], e=tour[j], f=tour[j+1]
     输入：
-        tour: 路径
+        tour        : 当前路径
+        dist_matrix : 城市间距离矩阵
     输出：
-        new_tour: 新的路径
+        new_tour    : swap 后的新路径
+        delta_E     : 路径长度增量（负值表示更优）
     """
+    n = len(tour)
+    i, j = sorted(np.random.choice(n, 2, replace=False))
+
+    # 相邻城市交换退化为普通 2-opt，直接整路重算
+    if j == i + 1 or (i == 0 and j == n - 1):
+        new_tour = tour.copy()
+        new_tour[i], new_tour[j] = new_tour[j], new_tour[i]
+        return new_tour, tour_length(new_tour, dist_matrix) - tour_length(tour, dist_matrix)
+
+    a = tour[(i - 1) % n]; b = tour[i]; c = tour[(i + 1) % n]
+    d = tour[(j - 1) % n]; e = tour[j]; f = tour[(j + 1) % n]
+
+    old_cost = (dist_matrix[a][b] + dist_matrix[b][c]
+              + dist_matrix[d][e] + dist_matrix[e][f])
+    new_cost = (dist_matrix[a][e] + dist_matrix[e][c]
+              + dist_matrix[d][b] + dist_matrix[b][f])
+    delta_E  = float(new_cost - old_cost)
+
     new_tour = tour.copy()
-    i, j = np.random.choice(len(tour), 2, replace=False)
     new_tour[i], new_tour[j] = new_tour[j], new_tour[i]
-    return new_tour
+    return new_tour, delta_E
 
 
-def neighbor_insert(tour: List[int]) -> List[int]:
+def move_insert(tour: List[int], dist_matrix: np.ndarray) -> Tuple[List[int], float]:
     """
-    插入法：随机取出一座城市，插入到随机位置
+    insert 邻域移动：随机取出一座城市，插入到随机位置，整路重算代价。
     输入：
-        tour: 路径
+        tour        : 当前路径
+        dist_matrix : 城市间距离矩阵
     输出：
-        new_tour: 新的路径
+        new_tour    : insert 后的新路径
+        delta_E     : 路径长度增量（负值表示更优）
     """
     new_tour = tour.copy()
     i = np.random.randint(len(tour))
-    city = new_tour.pop(i) # 随机取出一座城市，插入到随机位置
+    city = new_tour.pop(i)
     j = np.random.randint(len(new_tour))
     new_tour.insert(j, city)
-    return new_tour
+    delta_E = tour_length(new_tour, dist_matrix) - tour_length(tour, dist_matrix)
+    return new_tour, delta_E
 
 
 # ============================================================
@@ -180,11 +225,14 @@ def simulated_annealing(
 
         # 内循环：热平衡（Metropolis 采样）
         for _ in range(inner_iter):
-            # 生成邻域解（2-opt 逆转法）
-            new_tour = neighbor_2opt(current_tour) if neighbor == '2-opt' else neighbor_swap(current_tour) if neighbor == 'swap' else neighbor_insert(current_tour)
-            new_len  = tour_length(new_tour, dist_matrix)
-
-            delta_E = new_len - current_len
+            # 统一接口：move_* 返回 (new_tour, delta_E)，2-opt/swap 均为 O(1) 增量计算
+            if neighbor == '2-opt':
+                new_tour, delta_E = move_2opt(current_tour, dist_matrix)
+            elif neighbor == 'swap':
+                new_tour, delta_E = move_swap(current_tour, dist_matrix)
+            else:
+                new_tour, delta_E = move_insert(current_tour, dist_matrix)
+            new_len = current_len + delta_E
 
             # Metropolis 接受准则
             if delta_E < 0:

@@ -2,6 +2,15 @@
 
 ## 实验记录
 
+### 2026-03-20 v1.4
+**重构邻域函数接口，新增 swap O(1) 增量计算**
+- 将原来分散的 5 个邻域函数（`neighbor_2opt_with_indices`、`delta_2opt`、`neighbor_2opt`、`neighbor_swap`、`neighbor_insert`）统一重构为 3 个标准接口函数
+- 新接口统一签名：`move_*(tour, dist_matrix) -> (new_tour, delta_E)`，SA 内循环调用方式对齐
+- `move_2opt`：合并生成路径与 O(1) 增量计算，处理整环退化情形
+- `move_swap`：新增 O(1) swap delta 计算；相邻城市交换退化时自动回退整路重算
+- `move_insert`：保留整路重算（delta 推导复杂，性价比不高），统一签名
+- 代码由 5 函数收敛至 3 函数，可读性与可扩展性均提升
+
 ### 2026-03-20 v1.3
 **优化函数表达，修改部分注释**
 - 优化部分函数的表达形式，提升代码阅读性与结构清晰度（如参数与逻辑表达更集中）
