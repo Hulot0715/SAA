@@ -26,3 +26,9 @@ ALPHAS: list = [0.85, 0.92, 0.99]
 
 # 每个温度下的内循环迭代次数
 INNER_ITER: int = 200
+
+# 邻域解生成方法（可选：'2-opt'、'swap'、'insert'）
+NEIGHBOR_METHOD: str = '2-opt'
+
+# 降温策略（可选：'exponential'、'linear'、'logarithmic'、'adaptive'）
+COOLING_STRATEGY: str = 'exponential'

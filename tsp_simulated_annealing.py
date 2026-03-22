@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import time
 from typing import List, Tuple
 
@@ -16,6 +15,8 @@ from config import (
     T_FINAL,
     ALPHAS,
     INNER_ITER,
+    NEIGHBOR_METHOD,
+    COOLING_STRATEGY,
 )
 
 # 配置中文字体（用于画图）
@@ -183,7 +184,7 @@ def simulated_annealing(
         dist_matrix : 距离矩阵
         alpha       : 退火系数（冷却率）
         neighbor    : 邻域构造类型（2-opt、swap、insert）
-        T_d_type    : 温度衰减类型（线性、指数、对数）
+        T_d         : 温度衰减类型（可选：'exponential'、'linear'、'logarithmic'、'adaptive'）
         T0          : 初始温度
         T_final     : 终止温度
         inner_iter  : 每个温度的内循环迭代次数
@@ -260,14 +261,30 @@ def simulated_annealing(
         history['iterations'].append(outer_iter)
 
         # 降温
-        if T_d == 'linear':
+        if T_d == 'exponential':
+            # 指数降温（几何降温）
             T *= alpha
-        elif T_d == 'exponential':
-            T *= alpha ** (1 / inner_iter)
+        elif T_d == 'linear':
+            # 线性降温（固定步长）
+            linear_step = 5.0
+            T -= linear_step
         elif T_d == 'logarithmic':
-            T *= np.log(1 + inner_iter)
+            # 对数降温（随外循环增加而缓慢下降）
+            T = T0 / np.log(outer_iter + 2)
+        elif T_d == 'adaptive':
+            # 自适应退火：按接受率动态调节降温速度
+            acc_rate = accepted / inner_iter
+            if acc_rate > 0.6:
+                T *= 0.90
+            elif acc_rate < 0.2:
+                T *= 0.98
+            else:
+                T *= 0.95
         else:
             raise ValueError(f'Invalid temperature decay type: {T_d}')
+
+        # 避免温度变为非正数
+        T = max(T, T_final)
 
     return best_tour, best_len, history
 
@@ -279,10 +296,12 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
                        history: dict, alpha: float, best_len: float,
                        save_path: str = None):
     """
-    绘制单次实验结果：
-      左图：最终最优路线图（城市点 + 连线）
-      右图：收敛曲线（横轴迭代次数，纵轴路径长度）
-      输入：
+    绘制单次实验结果（2x2 四子图）：
+      1) 最优路径图
+      2) 路径长度变化
+      3) 温度变化
+      4) 接受率变化
+    输入：
         cities: 城市坐标数组
         tour: 路径
         history: 优化过程记录字典
@@ -290,13 +309,18 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
         best_len: 最优路径长度
         save_path: 保存路径
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle(
-        f'模拟退火 TSP  alpha={alpha}  |  学号: 125130024341  |  最优路径长度: {best_len:.2f}',
-        fontsize=13, fontweight='bold'
+        f'模拟退火 TSP  alpha={alpha}  |  最优路径长度: {best_len:.2f}',
+        fontsize=14, fontweight='bold'
     )
 
-    # 图1：最优路线图
+    ax1 = axes[0, 0]  # 最优路径
+    ax2 = axes[0, 1]  # 路径长度变化
+    ax3 = axes[1, 0]  # 温度变化
+    ax4 = axes[1, 1]  # 接受率变化
+
+    # 图1：最优路径图
     tour_closed = tour + [tour[0]]
     coords = cities[tour_closed]
     ax1.plot(coords[:, 0], coords[:, 1], 'b-', linewidth=1.2, alpha=0.7, label='路线')
@@ -306,7 +330,7 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
     for idx, (x, y) in enumerate(cities):
         ax1.annotate(str(idx), (x, y), fontsize=6,
                      ha='center', va='center', color='black')
-    ax1.set_title(f'最终最优路线图（alpha={alpha}）', fontsize=12)
+    ax1.set_title('最优路径图', fontsize=12)
     ax1.set_xlabel('X 坐标')
     ax1.set_ylabel('Y 坐标')
     ax1.legend(fontsize=10)
@@ -314,18 +338,35 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
     ax1.set_xlim(-20, COORD_RANGE + 20)
     ax1.set_ylim(-20, COORD_RANGE + 20)
 
-    # 图2：收敛曲线
+    # 图2：路径长度变化
     iters = history['iterations']
     ax2.plot(iters, history['best_lengths'], 'b-', linewidth=2, label='最优路径长度')
-    ax2.plot(iters, history['current_lengths'], 'r-', alpha=0.4,
-             linewidth=0.8, label='当前路径长度')
-    ax2.set_title(f'收敛曲线（alpha={alpha}）', fontsize=12)
+    ax2.plot(iters, history['current_lengths'], 'r-', alpha=0.5,
+             linewidth=1.0, label='当前路径长度')
+    ax2.set_title('路径长度变化', fontsize=12)
     ax2.set_xlabel('迭代次数（外循环）')
     ax2.set_ylabel('路径长度')
     ax2.legend(fontsize=10)
     ax2.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    # 图3：温度变化
+    ax3.plot(iters, history['temperatures'], color='#ff7f0e', linewidth=2, label='温度 T')
+    ax3.set_title('温度变化', fontsize=12)
+    ax3.set_xlabel('迭代次数（外循环）')
+    ax3.set_ylabel('温度')
+    ax3.legend(fontsize=10)
+    ax3.grid(True, alpha=0.3)
+
+    # 图4：接受率变化
+    ax4.plot(iters, history['acceptance_rates'], color='#2ca02c', linewidth=2, label='接受率')
+    ax4.set_title('接受率变化', fontsize=12)
+    ax4.set_xlabel('迭代次数（外循环）')
+    ax4.set_ylabel('接受率')
+    ax4.set_ylim(0, 1.05)
+    ax4.legend(fontsize=10)
+    ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f'  图表已保存：{save_path}')
@@ -334,48 +375,66 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
 
 def plot_comparison(histories: dict, alphas: List[float]):
     """
-    绘制三组退火系数的对比汇总图。
+    绘制三组退火系数的对比图（2x2 四子图）：
+      1) 最优路径长度对比
+      2) 当前路径长度对比
+      3) 温度变化对比
+      4) 接受率变化对比
     输入：
       histories: 优化过程记录字典
       alphas: 退火系数列表
     输出：
       None
     """
-    colors = ['#e74c3c', '#2ecc71', '#3498db'] #采用色系：红色、绿色、蓝色
+    colors = ['#e74c3c', '#2ecc71', '#3498db']  # 红、绿、蓝
 
-    fig = plt.figure(figsize=(16, 10))
-    fig.suptitle(
-        '模拟退火TSP对比实验\n学号: 125130024341',
-        fontsize=14, fontweight='bold'
-    )
-    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle('SAA for TSP 的降温系数对比', fontsize=14, fontweight='bold')
 
-    # 上行：各自的收敛曲线
-    for col, (alpha, color) in enumerate(zip(alphas, colors)):
-        ax = fig.add_subplot(gs[0, col])
-        h = histories[alpha]
-        ax.plot(h['iterations'], h['best_lengths'],
-                color=color, linewidth=2, label=f'alpha={alpha}')
-        ax.set_title(f'alpha = {alpha}', fontsize=12)
-        ax.set_xlabel('迭代次数')
-        ax.set_ylabel('最优路径长度')
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=10)
+    ax1 = axes[0, 0]  # 最优路径长度对比
+    ax2 = axes[0, 1]  # 当前路径长度对比
+    ax3 = axes[1, 0]  # 温度变化对比
+    ax4 = axes[1, 1]  # 接受率变化对比
 
-    # 下行：汇总对比
-    ax_all = fig.add_subplot(gs[1, :])
     for alpha, color in zip(alphas, colors):
         h = histories[alpha]
-        final_best = h['best_lengths'][-1]
-        ax_all.plot(h['iterations'], h['best_lengths'],
-                    color=color, linewidth=2,
-                    label=f'alpha={alpha}  最终最优={final_best:.2f}')
-    ax_all.set_title('三组退火系数收敛对比', fontsize=12)
-    ax_all.set_xlabel('迭代次数（外循环）')
-    ax_all.set_ylabel('最优路径长度')
-    ax_all.legend(fontsize=11)
-    ax_all.grid(True, alpha=0.3)
+        iters = h['iterations']
 
+        ax1.plot(iters, h['best_lengths'], color=color, linewidth=2,
+                 label=f'alpha={alpha}  最终={h["best_lengths"][-1]:.2f}')
+        ax2.plot(iters, h['current_lengths'], color=color, linewidth=1.5, alpha=0.9,
+                 label=f'alpha={alpha}')
+        ax3.plot(iters, h['temperatures'], color=color, linewidth=2,
+                 label=f'alpha={alpha}')
+        ax4.plot(iters, h['acceptance_rates'], color=color, linewidth=2,
+                 label=f'alpha={alpha}')
+
+    ax1.set_title('最优路径长度对比', fontsize=12)
+    ax1.set_xlabel('迭代次数（外循环）')
+    ax1.set_ylabel('最优路径长度')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=9)
+
+    ax2.set_title('当前路径长度对比', fontsize=12)
+    ax2.set_xlabel('迭代次数（外循环）')
+    ax2.set_ylabel('当前路径长度')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=9)
+
+    ax3.set_title('温度变化对比', fontsize=12)
+    ax3.set_xlabel('迭代次数（外循环）')
+    ax3.set_ylabel('温度')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend(fontsize=9)
+
+    ax4.set_title('接受率变化对比', fontsize=12)
+    ax4.set_xlabel('迭代次数（外循环）')
+    ax4.set_ylabel('接受率')
+    ax4.set_ylim(0, 1.05)
+    ax4.grid(True, alpha=0.3)
+    ax4.legend(fontsize=9)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig('tsp_comparison.png', dpi=150, bbox_inches='tight')
     print('对比图已保存：tsp_comparison.png')
     plt.show()
@@ -387,10 +446,16 @@ def plot_comparison(histories: dict, alphas: List[float]):
 if __name__ == '__main__':
     print('=' * 65)
     print('  TSP 模拟退火算法实验')
+    print('  本轮实验参数如下：\n')
+    print('  学号：125130024341')
+    print(f'  随机种子 seed(学号后5位) = {SEED}')
     print(f'  城市数量 N = {N_CITIES}   坐标范围: {COORD_RANGE}x{COORD_RANGE}')
     print(f'  初始温度 T0 = 1000 + {ID_LAST2}x20 = {T0}')
     print(f'  终止温度 T_final = {T_FINAL}')
     print(f'  每温度内循环次数 = {INNER_ITER}')
+    print(f'  alpha 列表 = {ALPHAS}')
+    print(f'  邻域方法   = {NEIGHBOR_METHOD}')
+    print(f'  降温策略   = {COOLING_STRATEGY}')
     print('=' * 65)
 
     # 生成个性化城市坐标
@@ -406,7 +471,7 @@ if __name__ == '__main__':
     histories = {}
 
     print('\n' + '-' * 65)
-    print('  开始参数对比实验（alpha = 0.85 / 0.92 / 0.99）')
+    print(f'  开始参数对比实验（alpha = {" / ".join(map(str, ALPHAS))}）')
     print('-' * 65)
 
     for alpha in ALPHAS:
@@ -417,8 +482,8 @@ if __name__ == '__main__':
             cities      = cities,
             dist_matrix = dist_matrix,
             alpha       = alpha,
-            neighbor    = '2-opt',
-            T_d         = 'linear',
+            neighbor    = NEIGHBOR_METHOD,
+            T_d         = COOLING_STRATEGY,
             T0          = T0,
             T_final     = T_FINAL,
             inner_iter  = INNER_ITER,
