@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # ============================================================
 # 0. 初始参数配置（从外部配置文件导入，修改参数在 config.py）
@@ -15,7 +15,9 @@ from config import (
     T_FINAL,
     ALPHAS,
     INNER_ITER,
+    PATIENCE,
     NEIGHBOR_METHOD,
+    INITIAL_TOUR_METHOD,
     COOLING_STRATEGY,
 )
 
@@ -70,7 +72,45 @@ def tour_length(tour: List[int], dist_matrix: np.ndarray) -> float:
 
 
 # ============================================================
-# 3. 邻域解生成（三种实现方式：2-opt逆转、随机交换、插入法）
+# 3. 最邻近贪心初始解生成
+# ============================================================
+def generate_initial_tour_nearest_neighbor(
+    dist_matrix: np.ndarray,
+    start_city: Optional[int] = None
+) -> List[int]:  # 最近邻贪心初始解生成器
+    """
+    最近邻（Nearest Neighbor）贪心初解：
+      从 start_city 出发，每一步都去当前城市最近且未访问的城市。
+      start_city 不传时，会使用当前随机种子下的随机起点（保证可复现）。
+    输入：
+        dist_matrix: 城市间欧氏距离矩阵
+        start_city: 初始起点城市
+    输出：
+        tour: 最邻近贪心初始解路径
+    """
+    n = dist_matrix.shape[0]
+    if start_city is None:  
+        start_city = int(np.random.randint(n))
+    else:
+        start_city = int(start_city)
+
+    visited = np.zeros(n, dtype=bool)  # 访问标记数组：True 表示城市已被放入路径
+    visited[start_city] = True  # 起点标记为已访问
+
+    tour = [start_city]  # 用列表保存路径顺序（从起点开始）
+    for _ in range(n - 1):  # 除起点外还需要选择 n-1 次后继城市
+        current = tour[-1]  # 当前所在城市编号（即路径最后一个元素）
+        candidates = np.where(~visited)[0]  # 所有未访问城市编号的候选集合
+        next_idx = int(np.argmin(dist_matrix[current][candidates]))  # 在候选集合中找“最小距离”的下标
+        next_city = int(candidates[next_idx])  # 得到对应的最近城市编号
+        tour.append(next_city)  # 把最近城市加入路径末尾
+        visited[next_city] = True  # 把该城市标记为已访问
+
+    return tour
+
+
+# ============================================================
+# 4. 邻域解生成（三种实现方式：2-opt逆转、随机交换、插入法）
 # ============================================================
 def move_2opt(tour: List[int], dist_matrix: np.ndarray) -> Tuple[List[int], float]:
     """
@@ -90,7 +130,7 @@ def move_2opt(tour: List[int], dist_matrix: np.ndarray) -> Tuple[List[int], floa
     n = len(tour)
     i, j = sorted(np.random.choice(n, 2, replace=False))
 
-    # 退化：整条路径完全反转，环长度不变
+    # 考虑退化情况：整条路径完全反转，环长度不变
     if i == 0 and j == n - 1:
         new_tour = tour[::-1]
         return new_tour, 0.0
@@ -174,6 +214,8 @@ def simulated_annealing(
     T0: float = T0,
     T_final: float = T_FINAL,
     inner_iter: int = INNER_ITER,
+    patience: int = PATIENCE,
+    init_method: str = INITIAL_TOUR_METHOD,
     rng_seed: int = SEED
 ) -> Tuple[List[int], float, dict]:
     """
@@ -188,6 +230,8 @@ def simulated_annealing(
         T0          : 初始温度
         T_final     : 终止温度
         inner_iter  : 每个温度的内循环迭代次数
+        patience    : 提前停止超参数（连续 patience 轮外循环无最优改进则停止）
+        init_method : 初始解生成方法（可选：'random'、'nearest_neighbor'）
         rng_seed    : 随机种子
 
     输出:
@@ -200,9 +244,15 @@ def simulated_annealing(
     np.random.seed(rng_seed)
     n = len(cities)
 
-    # 初始解：随机全排列
-    current_tour = list(range(n))
-    np.random.shuffle(current_tour)
+    # 初始解：按 init_method 生成
+    if init_method == 'random':
+        current_tour = list(range(n))
+        np.random.shuffle(current_tour)
+    elif init_method == 'nearest_neighbor': # 没有传递city数值，采用随机选择起点
+        current_tour = generate_initial_tour_nearest_neighbor(dist_matrix)
+    else:
+        raise ValueError(f"Invalid init_method: {init_method}. Use 'random' or 'nearest_neighbor'.")
+
     current_len = tour_length(current_tour, dist_matrix)
 
     best_tour = current_tour.copy()
@@ -218,11 +268,13 @@ def simulated_annealing(
 
     T = T0
     outer_iter = 0
+    no_improve_count = 0
 
     # 外循环：温度逐步降低
     while T > T_final:
         outer_iter += 1
         accepted = 0
+        improved_this_outer = False
 
         # 内循环：热平衡（Metropolis 采样）
         for _ in range(inner_iter):
@@ -245,6 +297,7 @@ def simulated_annealing(
                 if new_len < best_len:
                     best_tour = new_tour.copy()
                     best_len  = new_len
+                    improved_this_outer = True
             else:
                 # 劣于当前解 -> 以 Boltzmann 概率接受
                 prob = np.exp(-delta_E / T)
@@ -259,6 +312,14 @@ def simulated_annealing(
         history['temperatures'].append(T)
         history['acceptance_rates'].append(accepted / inner_iter)
         history['iterations'].append(outer_iter)
+
+        # 如果连续多轮外循环都没有任何 best_len 改进，则提前停止
+        if improved_this_outer:
+            no_improve_count = 0
+        else:
+            no_improve_count += 1
+            if no_improve_count >= patience:
+                break
 
         # 降温
         if T_d == 'exponential':
@@ -373,7 +434,7 @@ def plot_single_result(cities: np.ndarray, tour: List[int],
     plt.show()
 
 
-def plot_comparison(histories: dict, alphas: List[float]):
+def plot_comparison(histories: dict, alphas: List[float], save_path: str = 'tsp_comparison.png'):
     """
     绘制三组退火系数的对比图（2x2 四子图）：
       1) 最优路径长度对比
@@ -435,8 +496,8 @@ def plot_comparison(histories: dict, alphas: List[float]):
     ax4.legend(fontsize=9)
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig('tsp_comparison.png', dpi=150, bbox_inches='tight')
-    print('对比图已保存：tsp_comparison.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f'对比图已保存：{save_path}')
     plt.show()
 
 
@@ -455,7 +516,9 @@ if __name__ == '__main__':
     print(f'  每温度内循环次数 = {INNER_ITER}')
     print(f'  alpha 列表 = {ALPHAS}')
     print(f'  邻域方法   = {NEIGHBOR_METHOD}')
+    print(f'  初始解方法 = {INITIAL_TOUR_METHOD}')
     print(f'  降温策略   = {COOLING_STRATEGY}')
+    print(f'  patience(提前停止) = {PATIENCE}')
     print('=' * 65)
 
     # 生成个性化城市坐标
@@ -469,6 +532,8 @@ if __name__ == '__main__':
     # 三组参数对比实验
     results   = {}
     histories = {}
+    init_tag = 'random' if INITIAL_TOUR_METHOD == 'random' else 'nn'
+    cmp_save_path = 'tsp_comparison.png' if INITIAL_TOUR_METHOD == 'random' else f'tsp_comparison_{init_tag}.png'
 
     print('\n' + '-' * 65)
     print(f'  开始参数对比实验（alpha = {" / ".join(map(str, ALPHAS))}）')
@@ -487,6 +552,8 @@ if __name__ == '__main__':
             T0          = T0,
             T_final     = T_FINAL,
             inner_iter  = INNER_ITER,
+            patience    = PATIENCE,
+            init_method = INITIAL_TOUR_METHOD,
             rng_seed    = SEED
         )
 
@@ -501,13 +568,16 @@ if __name__ == '__main__':
         histories[alpha] = history
 
         # 每个 alpha 单独保存一张路线+收敛图
-        save_name = f'tsp_result_alpha{str(alpha).replace(".", "")}.png'
+        if INITIAL_TOUR_METHOD == 'random':
+            save_name = f'tsp_result_alpha{str(alpha).replace(".", "")}.png'
+        else:
+            save_name = f'tsp_result_{init_tag}_alpha{str(alpha).replace(".", "")}.png'
         plot_single_result(cities, best_tour, history, alpha, best_len, save_path=save_name)
 
     # 汇总对比图
     print('\n' + '-' * 65)
     print('  生成参数对比汇总图...')
-    plot_comparison(histories, ALPHAS)
+    plot_comparison(histories, ALPHAS, save_path=cmp_save_path)
 
     # 打印结果汇总表
     print('\n' + '=' * 65)
